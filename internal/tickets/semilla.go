@@ -1,37 +1,18 @@
-
 package tickets
 
-import (
-	"time"
-	"gorm.io/gorm"
-)
+import "gorm.io/gorm"
 
-func Sembrar(db *gorm.DB) {
-	var total int64
-	db.Model(&Ticket{}).Count(&total)
-	if total > 0 {
-		return
+// Sembrar deja tres tickets si la tabla está vacía.
+func Sembrar(db *gorm.DB) error {
+	var n int64
+	db.Model(&Ticket{}).Count(&n)
+	if n > 0 {
+		return nil
 	}
-
-	eventoSample := Evento{
-		Nombre: "Concierto Rock 2026",
-		Fecha:  time.Now().Add(24 * time.Hour),
-		Lugar:  "Estadio Central",
-		Tickets: []Ticket{
-			{
-				Placa:       "PBA-1234",
-				Espacio:     "A-01",
-				Propietario: "Carlos Pérez",
-				Estado:      "RESERVADO",
-			},
-			{
-				Placa:       "GBA-5678",
-				Espacio:     "A-02",
-				Propietario: "María López",
-				Estado:      "INGRESADO",
-			},
-		},
-	}
-
-	db.Create(&eventoSample)
+	return db.Create(&[]Ticket{
+		{Asunto: "No enciende el proyector del aula 309", Estado: "abierto",
+			Comentarios: []Comentario{{Texto: "Ya se avisó a mantenimiento"}}},
+		{Asunto: "Sin internet en el laboratorio 2", Estado: "en_proceso"},
+		{Asunto: "Contraseña del aula virtual vencida", Estado: "cerrado"},
+	}).Error
 }

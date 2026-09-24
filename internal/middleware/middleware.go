@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Jorge10001/servA-Castro-Aragundi/internal/respuesta" // Ajusta con el nombre de tu módulo
+	"mesa-ayuda/internal/respuesta"
 )
 
 type grabador struct {
@@ -37,7 +37,7 @@ func Recuperacion(next http.Handler) http.Handler {
 		defer func() {
 			if p := recover(); p != nil {
 				log.Printf("PÁNICO en %s %s: %v", r.Method, r.URL.Path, p)
-				respuesta.Error(w, http.StatusInternalServerError, "error_interno", "ocurrió un error inesperado")
+				respuesta.Error(w, http.StatusInternalServerError, "ocurrió un error inesperado")
 			}
 		}()
 		next.ServeHTTP(w, r)

@@ -1,7 +1,3 @@
+# Binarios compilados.
 *.exe
-*.out
-bin/
-.env
-.env.*
-.DS_Store
-*.log
+/mesa-ayuda

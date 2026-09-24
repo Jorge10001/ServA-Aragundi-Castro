@@ -1,4 +1,3 @@
-
 package tickets
 
 import (
@@ -6,176 +5,90 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	// Reemplaza 'parqueo-eventos' por el nombre de tu módulo en go.mod
-	"github.com/Jorge10001/servA-Castro-Aragundi/internal/respuesta"
+	"mesa-ayuda/internal/respuesta"
 )
 
+// Manejador agrupa las rutas de tickets y lleva la conexión adentro.
 type Manejador struct {
 	DB *gorm.DB
 }
 
+// Rutas registra las rutas de tickets en el enrutador.
 func (m *Manejador) Rutas(r chi.Router) {
-	r.Post("/tickets", m.crear)
 	r.Get("/tickets", m.listar)
+	r.Post("/tickets", m.crear)
 	r.Get("/tickets/{id}", m.verUno)
-	r.Put("/tickets/{id}", m.actualizar)
-	r.Delete("/tickets/{id}", m.borrar)
-
-	// Fase 2c: Listado de la entidad del lado del uno con Preload
-	r.Get("/eventos", m.listarEventos)
 }
 
-func leerID(w http.ResponseWriter, r *http.Request) (uint, bool) {
+// leerID convierte el {id} de la ruta; si no es un número devuelve false.
+func leerID(r *http.Request) (uint, bool) {
 	n, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil || n <= 0 {
-		respuesta.Error(w, http.StatusBadRequest, "id_invalido", "El id debe ser un número positivo")
 		return 0, false
 	}
 	return uint(n), true
 }
 
-// 1. CREAR (POST /tickets)
+// crear: 400 si el JSON está roto · 422 si un dato rompe una regla · 201 si se guardó.
+// Las dos primeras salidas ocurren ANTES de tocar la base de datos.
 func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 	var t Ticket
 	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-		respuesta.Error(w, http.StatusBadRequest, "json_invalido", "El cuerpo no es un JSON válido")
+		respuesta.Error(w, http.StatusBadRequest, "el cuerpo no es JSON válido")
 		return
 	}
-	t.ID = 0
-
-	// Validar estado (422)
-	if !estadosValidos[t.Estado] {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "estado_invalido", "Estado no válido")
+	if strings.TrimSpace(t.Asunto) == "" {
+		respuesta.Error(w, http.StatusUnprocessableEntity, "el asunto es obligatorio")
 		return
 	}
-
-	// Regla extra de negocio (422): Placa, Espacio y EventoID requeridos
-	if t.Placa == "" || t.Espacio == "" || t.EventoID == 0 {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "datos_incompletos", "La placa, el espacio y el EventoID son obligatorios")
+	if !EstadosValidos[t.Estado] {
+		respuesta.Error(w, http.StatusUnprocessableEntity, "estado no permitido: "+t.Estado)
 		return
 	}
-
-	if err := m.DB.Debug().Create(&t).Error; err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "No se pudo guardar el ticket")
+	// ---- desde aquí hace falta la base de datos ----
+	if err := m.DB.Create(&t).Error; err != nil {
+		respuesta.Error(w, http.StatusInternalServerError, "no se pudo guardar")
 		return
 	}
-
-	respuesta.Exito(w, http.StatusCreated, t)
+	respuesta.JSON(w, http.StatusCreated, t)
 }
 
-// 2. LISTAR Y FILTRAR SEGURO (GET /tickets?estado=...)
-func (m *Manejador) listar(w http.ResponseWriter, r *http.Request) {
-	var list []Ticket
-	query := m.DB.Debug().Preload("Evento")
-
-	estado := r.URL.Query().Get("estado")
-	if estado != "" {
-		// Filtrado seguro usando ? contra SQL Injection (Fase 2d)
-		query = query.Where("estado = ?", estado)
-	}
-
-	if err := query.Find(&list).Error; err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "Error al consultar los tickets")
-		return
-	}
-
-	respuesta.Exito(w, http.StatusOK, list)
-}
-
-// 3. VER UNO (GET /tickets/{id})
+// verUno: 400 si el id no es un número · 404 si no existe · 200 si existe.
 func (m *Manejador) verUno(w http.ResponseWriter, r *http.Request) {
-	id, ok := leerID(w, r)
+	id, ok := leerID(r)
 	if !ok {
+		respuesta.Error(w, http.StatusBadRequest, "el id debe ser un número entero positivo")
 		return
 	}
-
+	// ---- desde aquí hace falta la base de datos ----
 	var t Ticket
-	err := m.DB.Debug().Preload("Evento").First(&t, id).Error
+	err := m.DB.Preload("Comentarios").First(&t, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		respuesta.Error(w, http.StatusNotFound, "no_encontrado", "El ticket no existe")
-		return
-	} else if err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "Error al buscar")
+		respuesta.Error(w, http.StatusNotFound, "no existe el ticket")
 		return
 	}
-
-	respuesta.Exito(w, http.StatusOK, t)
+	if err != nil {
+		respuesta.Error(w, http.StatusInternalServerError, "no se pudo leer")
+		return
+	}
+	respuesta.JSON(w, http.StatusOK, t)
 }
 
-// 4. ACTUALIZAR (PUT /tickets/{id})
-func (m *Manejador) actualizar(w http.ResponseWriter, r *http.Request) {
-	id, ok := leerID(w, r)
-	if !ok {
+// listar: ?estado= filtra con parámetro (nunca pegando texto en la consulta).
+func (m *Manejador) listar(w http.ResponseWriter, r *http.Request) {
+	var lista []Ticket
+	consulta := m.DB.Preload("Comentarios")
+	if estado := r.URL.Query().Get("estado"); estado != "" {
+		consulta = consulta.Where("estado = ?", estado)
+	}
+	if err := consulta.Find(&lista).Error; err != nil {
+		respuesta.Error(w, http.StatusInternalServerError, "no se pudo listar")
 		return
 	}
-
-	var existente Ticket
-	err := m.DB.First(&existente, id).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		respuesta.Error(w, http.StatusNotFound, "no_encontrado", "El ticket no existe")
-		return
-	}
-
-	var entrada Ticket
-	if err := json.NewDecoder(r.Body).Decode(&entrada); err != nil {
-		respuesta.Error(w, http.StatusBadRequest, "json_invalido", "El cuerpo no es un JSON válido")
-		return
-	}
-
-	if !estadosValidos[entrada.Estado] {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "estado_invalido", "Estado no válido")
-		return
-	}
-
-	if entrada.Placa == "" || entrada.Espacio == "" {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "datos_incompletos", "La placa y espacio son obligatorios")
-		return
-	}
-
-	existente.Estado = entrada.Estado
-	existente.Placa = entrada.Placa
-	existente.Espacio = entrada.Espacio
-	existente.Propietario = entrada.Propietario
-
-	if err := m.DB.Debug().Save(&existente).Error; err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "Error al actualizar")
-		return
-	}
-
-	respuesta.Exito(w, http.StatusOK, existente)
-}
-
-// 5. BORRAR (DELETE /tickets/{id})
-func (m *Manejador) borrar(w http.ResponseWriter, r *http.Request) {
-	id, ok := leerID(w, r)
-	if !ok {
-		return
-	}
-
-	res := m.DB.Debug().Delete(&Ticket{}, id)
-	if res.Error != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "Error al eliminar")
-		return
-	}
-
-	if res.RowsAffected == 0 {
-		respuesta.Error(w, http.StatusNotFound, "no_encontrado", "El ticket no existe")
-		return
-	}
-
-	respuesta.Exito(w, http.StatusOK, map[string]string{"mensaje": "Registro eliminado correctamente"})
-}
-
-// 6. LISTAR LADO DEL UNO CON PRELOAD (GET /eventos) - Cumple Fase 2c sin problema N+1
-func (m *Manejador) listarEventos(w http.ResponseWriter, r *http.Request) {
-	var eventos []Evento
-	if err := m.DB.Debug().Preload("Tickets").Find(&eventos).Error; err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "Error al consultar eventos")
-		return
-	}
-	respuesta.Exito(w, http.StatusOK, eventos)
+	respuesta.JSON(w, http.StatusOK, lista)
 }

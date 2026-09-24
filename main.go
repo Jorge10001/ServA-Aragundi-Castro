@@ -1,44 +1,47 @@
-
 package main
 
 import (
-	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	// Ajusta según el nombre de tu módulo en go.mod
-	"github.com/Jorge10001/servA-Castro-Aragundi/internal/tickets"
+	"mesa-ayuda/internal/tickets"
 )
 
-func main() {
-	reset := flag.Bool("reset", false, "borra las tablas y arranca con la base vacía")
-	flag.Parse()
+const claveFirma = "uleam-2026-2-mesa-de-ayuda" // firmará los tokens en la unidad 2
 
-	dsn := "host=localhost port=5432 user=admin password=secreto dbname=parqueo_eventos sslmode=disable"
+func main() {
+	dsn := "host=localhost user=postgres password=Secreta123 dbname=mesa_ayuda_demo port=5433"
+	puerto := ":8080"
+
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal("Error de conexión:", err)
+		log.Fatal("no se pudo conectar: ", err)
 	}
-
-	if *reset {
-		db.Migrator().DropTable(&tickets.Ticket{}, &tickets.Evento{})
+	if err := db.AutoMigrate(&tickets.Ticket{}, &tickets.Comentario{}); err != nil {
+		log.Fatal("no se pudo migrar: ", err)
 	}
-
-	err = db.Debug().AutoMigrate(&tickets.Evento{}, &tickets.Ticket{})
-	if err != nil {
-		log.Fatal("Error en AutoMigrate:", err)
+	if err := tickets.Sembrar(db); err != nil {
+		log.Fatal("no se pudo sembrar: ", err)
 	}
-
-	tickets.Sembrar(db)
 
 	r := chi.NewRouter()
-
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(5 * time.Second))
 	(&tickets.Manejador{DB: db}).Rutas(r)
 
-	log.Println("Servidor iniciado en puerto :8081")
-	log.Fatal(http.ListenAndServe(":8081", r))
+	servidor := &http.Server{
+		Addr:         puerto,
+		Handler:      r,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+	}
+	log.Println("escuchando en", puerto)
+	log.Fatal(servidor.ListenAndServe())
 }
